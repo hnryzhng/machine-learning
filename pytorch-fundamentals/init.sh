@@ -1,7 +1,7 @@
-# Run this if executing notebook via local Python runtime instead of Colab
-
-python3 -m venv .venv
-
+echo "Starting virtual environment"
 source .venv/bin/activate
 
-pip3 install torch jupyter torchvision numpy pandas scipy requests matplotlib Pillow
+echo "Starting jupyter lab in local environment (for Apple Silicon)"
+jupyter lab
+
+echo "Initialization complete - run your notebook!"
