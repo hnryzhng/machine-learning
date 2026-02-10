@@ -1,5 +1,5 @@
 """
-activation_utils.py
+model_inspection.py
 
 A small, readable toolbox for inspecting CNNs during a forward pass:
 1) Model inspection (parameter counts, parameter shapes, module tree)
@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 
 
 # =============================================================================
-# 1) BASIC MODEL INSPECTION (simple, notebook-friendly helpers)
+# 1a) BASIC MODEL INSPECTION (simple, notebook-friendly helpers)
 # =============================================================================
 
 def count_parameters(model: nn.Module, trainable_only: bool = False) -> int:
@@ -83,6 +83,142 @@ def print_all_modules(model: nn.Module, skip_root: bool = True) -> None:
             continue
         print(name, module)
 
+# =============================================================================
+# 1b) PARAMETER DISTRIBUTION (how many parameters per layer / module)
+# =============================================================================
+
+def count_parameters_in_module(module: nn.Module, trainable_only: bool = False) -> int:
+    """
+    Count parameters inside a module (including its submodules).
+    """
+    if trainable_only:
+        return sum(p.numel() for p in module.parameters() if p.requires_grad)
+    return sum(p.numel() for p in module.parameters())
+
+
+def get_parameter_count_by_terminal_layer(
+    model: nn.Module,
+    trainable_only: bool = False,
+    skip_zero_param: bool = True,
+) -> Dict[str, int]:
+    """
+    Return parameter counts for each "terminal" layer (a module with no children).
+
+    Why "terminal":
+      - gives you the most granular view (Conv2d / Linear / BatchNorm, etc.)
+      - avoids double-counting inside blocks (ConvBlock/Sequential)
+
+    Example keys:
+      - "features.0.block.0"  (Conv2d)
+      - "classifier.0"        (Linear)
+
+    Note:
+      - Terminal modules like ReLU/MaxPool/Dropout have 0 params (can skip them).
+    """
+    counts: Dict[str, int] = {}
+
+    for name, module in model.named_modules():
+        if name == "":
+            continue
+
+        is_terminal = (len(list(module.children())) == 0)
+        if not is_terminal:
+            continue
+
+        n_params = count_parameters_in_module(module, trainable_only=trainable_only)
+
+        if skip_zero_param and n_params == 0:
+            continue
+
+        counts[name] = n_params
+
+    return counts
+
+
+def get_parameter_count_by_named_module(
+    model: nn.Module,
+    depth: Optional[int] = None,
+    trainable_only: bool = False,
+    skip_zero_param: bool = True,
+) -> Dict[str, int]:
+    """
+    Return parameter counts for modules at a certain name depth.
+
+    This is useful when a model is huge and terminal-layer granularity is too detailed.
+    For example:
+      depth=1 gives "features", "classifier"
+      depth=2 gives "features.0", "features.1", ...
+
+    Args:
+      depth:
+        - None => returns counts for *all* named modules (can be very large).
+        - int  => only include module names where name.split(".") length == depth
+      trainable_only: count only requires_grad parameters
+      skip_zero_param: skip modules with 0 parameters
+
+    Caution:
+      - These counts include submodules (so they WILL overlap).
+      - Use terminal-layer counts to avoid overlap.
+    """
+    counts: Dict[str, int] = {}
+
+    for name, module in model.named_modules():
+        if name == "":
+            continue
+
+        if depth is not None:
+            if len(name.split(".")) != depth:
+                continue
+
+        n_params = count_parameters_in_module(module, trainable_only=trainable_only)
+
+        if skip_zero_param and n_params == 0:
+            continue
+
+        counts[name] = n_params
+
+    return counts
+
+
+def plot_parameter_counts(
+    counts: Dict[str, int],
+    top_k: int = 30,
+    title: str = "Parameter Count by Layer",
+    sort_desc: bool = True,
+    log_scale: bool = False,
+) -> None:
+    """
+    Bar chart for parameter counts.
+
+    Args:
+      counts: dict[name -> num_params]
+      top_k: plot only the top K (helps readability for large models)
+      title: plot title
+      sort_desc: sort descending so biggest layers pop out (default True)
+      log_scale: use log scale for y-axis (helpful when one layer dominates)
+    """
+    if not counts:
+        print("No parameter counts to plot.")
+        return
+
+    items = list(counts.items())
+    items.sort(key=lambda x: x[1], reverse=sort_desc)
+
+    items = items[:top_k]
+    names = [k for k, _ in items]
+    vals = [v for _, v in items]
+
+    plt.figure(figsize=(10, max(4, 0.25 * len(names))))
+    plt.barh(range(len(names)), vals)
+    plt.yticks(range(len(names)), names)
+    plt.gca().invert_yaxis()  # biggest on top
+    plt.xlabel("Number of parameters")
+    plt.title(title)
+    if log_scale:
+        plt.xscale("log")
+    plt.tight_layout()
+    plt.show()
+    
 
 # =============================================================================
 # 2) SHAPE TRACING (log tensor shapes through layers without editing forward)
@@ -439,3 +575,5 @@ def plot_conv_per_channel_stats(activation: torch.Tensor, layer_name: str) -> No
     plt.xlabel("channel")
     plt.ylabel("zero fraction")
     plt.show()
+
+
